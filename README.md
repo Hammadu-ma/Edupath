@@ -30,10 +30,13 @@ Never put a secret/service-role key in a `VITE_` variable.
 
 ## Database migrations (apply in order)
 ```
-supabase/migrations/202610250001_initial_foundation.sql   (already in repo history; apply if not yet applied)
-supabase/migrations/202610250002_marketplace.sql          (new, additive, non-destructive)
+supabase/migrations/202610250001_initial_foundation.sql   (repo baseline; the hosted project was created from an earlier equivalent schema)
+supabase/migrations/202610250002_marketplace.sql          (additive; works on the repo baseline AND the hosted project's original schema)
+supabase/migrations/202610250003_hardening.sql            (revokes a trigger function from the API; moves btree_gist out of `public`)
 ```
-Apply with the Supabase SQL editor or `supabase db push`. Migration 2 never drops tables or data; it replaces two over-restrictive tutor policies, adds tables/RPCs/RLS, and back-fills a `student` role + profile for any pre-existing auth users. **I could not read your live project, so check `supabase migration list` first** and confirm migration 1 is applied.
+**Status of the hosted project (`urtepxlegqmkgylneeup`, applied 2026-10-26 via Supabase MCP):** the marketplace and hardening migrations are applied; the original `edupath_initial_schema` was left untouched. The original schema allowed users to update their own `profiles.role` (including `admin`) and tutor verification fields; migration 2 closes both with column-level grants, a guard trigger, and no admin role in `user_roles` (admins live in a separate `admins` table).
+
+Remaining advisor notes (all intentional): `public_tutors`, `public_reviews`, `booking_details`, `my_conversations` are owner-rights views that expose only public columns or rows filtered by `auth.uid()`; the booking/verification RPCs are signed-in-callable `SECURITY DEFINER` functions that re-check permissions internally; `tutor_busy_slots` is public on purpose (time ranges only). **Leaked-password protection** is a dashboard toggle (Authentication → Password security) that I cannot set from SQL.
 
 ### Create your first administrator
 There is deliberately no admin signup. After registering normally, run once in the SQL editor:
@@ -53,7 +56,8 @@ Admins then see **Admin** in the account menu to verify tutors.
 npm install
 npm run dev          # http://localhost:5173
 npm run typecheck && npm test && npm run build
-npm run test:db      # needs local Postgres (psql/createdb); runs migrations + RLS suite on a THROWAWAY db
+npm run test:db      # needs local Postgres; runs migrations + RLS suite on a THROWAWAY db
+BASELINE=live npm run test:db   # same suite, starting from a replica of the hosted project's original schema
 ```
 
 ## Deploy (Vercel)

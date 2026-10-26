@@ -40,3 +40,4 @@ begin
   if c <> n then raise exception 'FAIL % (expected % rows affected, got %)', label, n, c; end if;
   raise notice 'PASS  % [% rows affected]', label, c;
 end $$;
+create schema if not exists extensions;

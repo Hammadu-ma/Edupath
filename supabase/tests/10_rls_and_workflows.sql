@@ -28,6 +28,7 @@ select '--- PROFILE / ROLE ESCALATION (as student S)' as section;
 set role authenticated; select set_config('request.jwt.claim.sub', :'S', false);
 select test.expect_ok('student updates own display name', format($q$update public.profiles set display_name='Sara S.' where id=%L$q$, :'S'));
 select test.expect_affected('student cannot update someone else''s profile', format($q$update public.profiles set display_name='pwned' where id=%L$q$, :'T'), 0);
+select test.expect_error('student cannot write a role column on profiles', format($q$update public.profiles set role='admin' where id=%L$q$, :'S'));
 select test.expect_error('student cannot insert user_roles (self-grant)', format($q$insert into public.user_roles(user_id, role) values (%L,'tutor')$q$, :'S'), 'permission denied');
 select test.expect_error('student cannot insert into admins', format($q$insert into public.admins(user_id) values (%L)$q$, :'S'), 'permission denied');
 select test.expect_count('student cannot see admin rows', 'select 1 from public.admins', 0);

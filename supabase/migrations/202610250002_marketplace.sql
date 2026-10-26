@@ -6,6 +6,48 @@
 create extension if not exists btree_gist;
 
 -- ---------------------------------------------------------------------------
+-- 0. Compatibility. The hosted EduPath project was created from an earlier schema
+--    (profiles.role, tutor_profiles.hourly_rate / is_public, no user_roles). This section lifts either
+--    shape to the one used below. Additive only: no table or column is dropped, no data is deleted.
+-- ---------------------------------------------------------------------------
+create table if not exists public.user_roles (
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  role public.app_role not null check (role <> 'admin'),
+  created_at timestamptz not null default now(),
+  primary key (user_id, role)
+);
+alter table public.user_roles enable row level security;
+drop policy if exists roles_select_own on public.user_roles;
+create policy roles_select_own on public.user_roles for select to authenticated using ((select auth.uid()) = user_id);
+
+alter table public.tutor_profiles
+  add column if not exists headline text,
+  add column if not exists hourly_rate_etb integer,
+  add column if not exists is_searchable boolean not null default false;
+do $$ begin
+  alter table public.tutor_profiles add constraint tutor_rate_etb_check check (hourly_rate_etb is null or hourly_rate_etb >= 0);
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table public.tutor_profiles add constraint tutor_searchable_requires_verified check (not is_searchable or verification_status = 'verified');
+exception when duplicate_object then null; end $$;
+do $$ begin
+  if exists (select 1 from information_schema.columns where table_schema='public' and table_name='tutor_profiles' and column_name='hourly_rate') then
+    execute 'update public.tutor_profiles set hourly_rate_etb = round(hourly_rate)::int where hourly_rate_etb is null and hourly_rate is not null';
+  end if;
+  if exists (select 1 from information_schema.columns where table_schema='public' and table_name='profiles' and column_name='role') then
+    -- legacy single role column -> user_roles (never carries 'admin' over)
+    execute 'insert into public.user_roles (user_id, role) select id, role from public.profiles where role <> ''admin'' on conflict do nothing';
+  end if;
+end $$;
+-- Legacy permissive policies (they let users write any column, including their own role / verification).
+drop policy if exists "Users can create own profile" on public.profiles;
+drop policy if exists "Users can create own tutor profile" on public.tutor_profiles;
+drop policy if exists "Users can update own tutor profile" on public.tutor_profiles;
+drop policy if exists tutors_select_verified_or_own on public.tutor_profiles;
+create policy tutors_select_verified_or_own on public.tutor_profiles for select to anon, authenticated using (
+  (is_searchable = true and verification_status = 'verified') or (select auth.uid()) = user_id);
+
+-- ---------------------------------------------------------------------------
 -- Enums
 -- ---------------------------------------------------------------------------
 do $$ begin
@@ -81,7 +123,8 @@ create policy tutors_update_own on public.tutor_profiles for update to authentic
 drop policy if exists tutors_select_admin on public.tutor_profiles;
 create policy tutors_select_admin on public.tutor_profiles for select to authenticated using (public.is_admin());
 
-revoke insert, update, delete on public.tutor_profiles from anon, authenticated;
+revoke all on public.tutor_profiles from anon, authenticated;
+grant select on public.tutor_profiles to anon, authenticated;
 grant update (headline, bio, teaching_modes, subjects, grade_levels, languages, hourly_rate_etb,
   service_area, travel_radius_km, university, field_of_study, qualifications, accepting_bookings)
   on public.tutor_profiles to authenticated;
@@ -106,11 +149,10 @@ create trigger tutor_profiles_guard before update on public.tutor_profiles
   for each row execute function public.guard_tutor_profile();
 
 -- Profiles: only display name and language are editable.
-revoke all on public.profiles, public.user_roles from anon;
-revoke insert, update, delete on public.profiles from anon, authenticated;
+revoke all on public.profiles, public.user_roles from anon, authenticated;
+grant select on public.profiles, public.user_roles to authenticated;
 grant update (display_name, preferred_language) on public.profiles to authenticated;
 drop policy if exists profiles_insert_own on public.profiles;
-revoke insert, update, delete on public.user_roles from anon, authenticated;
 
 -- ---------------------------------------------------------------------------
 -- Signup: create profile + (non-admin) role from signup metadata. Roles can never include admin.
